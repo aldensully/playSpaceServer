@@ -22,7 +22,7 @@ app.get('/', (req:any, res:any) => {
 
 	// res.send('hello world')
 })
-app.get('hello', (req:any, res:any) => {
+app.get('/hello', (req:any, res:any) => {
 	res.send('hello world')
 })
 
