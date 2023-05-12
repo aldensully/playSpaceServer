@@ -23,5 +23,5 @@ app.get('/', (req:any, res:any) => {
 	// res.send('hello world')
 })
 
-app.listen(8080)
+app.listen(3000)
 
