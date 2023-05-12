@@ -22,6 +22,10 @@ app.get('/', (req:any, res:any) => {
 
 	// res.send('hello world')
 })
+app.get('hello', (req:any, res:any) => {
+	res.send('hello world')
+})
+
 console.log('app listening on port 3000!')
 app.listen(3000)
 
