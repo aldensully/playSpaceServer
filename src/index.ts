@@ -3,18 +3,19 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 var path = require('path');
-// app.use(express.static('src/streaming/'));
-// app.use('/streaming', express.static(path.join(__dirname, 'streaming')));
-app.use(cors());
 const fs = require('fs');
-// const Throttle = require('throttle');
-// const { ffprobeSync } = require('@dropb/ffprobe');
 const ytdl = require('ytdl-core');
 var ProgressBar = require('progress');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const ffmpeg = require('fluent-ffmpeg');
 ffmpeg.setFfmpegPath(ffmpegPath);
 const stream = require('youtube-audio-stream');
+const bodyParser = require('body-parser');
+
+
+app.use(cors());
+app.use(express.json()); // for parsing application/json
+app.use(express.urlencoded({ extended: true }));
 
 //app.get('/', async (req:any, res:any) => {
 //	 const bitRate = ffprobeSync('../assets/power_chords.mp3').format.bit_rate;
@@ -56,18 +57,48 @@ const stream = require('youtube-audio-stream');
 //				bar.tick(percent);
 //			})
 //})
+type Song = {
+	url: string;
+	title: string;
+	artist: string;
+	duration: number;
+	thumbnailUri: string;
+};
 
-const streams = {}
+type StreamStoreType = {
+	[key: string]: {
+		id: string;
+		name: string;
+		queue: Song[];
+		state: 'idle' | 'playing' | 'paused';
+	};
+};
 
+const streams: StreamStoreType = {
+	'1': {
+		id: '1',
+		name: 'space_1',
+		state: 'idle',
+		queue: []
+	}
+};
+
+app.get('/spaces', (req: Request, res: Response) => {
+	res.status(200).json({ spaces: Object.values(streams) });
+});
 
 app.get('/streaming/:filename', function (req: any, res: any) {
 	const filename = req.params.filename;
+	console.log('reading: ', filename);
 	const file = fs.createReadStream(path.join(__dirname, 'streaming', filename));
 	file.pipe(res);
 });
 
-app.get('/stream.m3u8', cors(), (req: any, res: any) => {
-	const filePath = path.join(__dirname, 'streaming', 'stream.m3u8');
+app.get('/:spaceId/stream.m3u8', cors(), (req: any, res: any) => {
+	const spaceId = req.params.spaceId;
+	const filePath = path.join(__dirname, 'streaming', spaceId, 'stream.m3u8');
+	console.log('getting file for: ', filePath);
+
 	// Check if the file exists
 	if (fs.existsSync(filePath)) {
 		// Set the appropriate headers for audio streaming
@@ -83,37 +114,72 @@ app.get('/stream.m3u8', cors(), (req: any, res: any) => {
 		res.sendStatus(404);
 	}
 });
-app.get('/addSong',(req:any,res:any)=>{
-	const {spaceId, songUrl} = req.body;
-	if(!spaceId || !songUrl){
-		res.status(400).send("Bad Request");
-		return;
+
+app.post('/addSong', async (req: Request, res: Response) => {
+	try {
+		const { spaceId, songUrl } = req.body;
+
+		if (!spaceId || !songUrl) {
+			return res.status(400).json({ error: "Bad Request - spaceId and songUrl must be provided" });
+		}
+
+		const songInfo = await ytdl.getBasicInfo(songUrl);
+
+		if (!songInfo || !songInfo.videoDetails) {
+			return res.status(400).json({ error: "Bad Request - songUrl is not valid" });
+		}
+		const newSong = {
+			title: songInfo.videoDetails.title,
+			url: songUrl,
+			artist: songInfo.videoDetails.author.name,
+			duration: songInfo.videoDetails.lengthSeconds,
+			thumbnailUri: songInfo.videoDetails.thumbnails[0].url
+		};
+		// await downloadStream(songUrl, spaceId);
+		streams[spaceId].queue = [...streams[spaceId].queue, newSong];
+
+		res.status(200).json({
+			song: {
+				title: songInfo.videoDetails.title,
+				url: songUrl,
+				artist: songInfo.videoDetails.author.name,
+				duration: songInfo.videoDetails.lengthSeconds,
+				thumbnailUri: songInfo.videoDetails.thumbnails[0].url
+			}
+		});
+	} catch (error) {
+		console.error(error);
+		res.status(500).json({ error: "Internal Server Error" });
 	}
+});
 
-	if(!streams[spaceId]){
-		streams[spaceId] = {state:'idle',queue:[]};
+
+app.get('/:spaceId', (req: any, res: any) => {
+	const spaceId = req.params.spaceId;
+	if (!streams[spaceId]) {
+		res.status(404).json({ error: 'space not found' });
+	} else {
+		res.status(200).json({ space: streams[spaceId] });
 	}
-	streams[spaceId].queue.push(songUrl);
+});
 
+app.get('/streams/:streamId', (req: any, res: any) => {
+	const streamId = req.params.streamId;
 
-	//check if space and song exist
-	//if yes, add song to space queue
-	//return status
-})
+});
 
-app.get('/', (req: any, res: any) => {
-
-	const yturl = 'https://www.youtube.com/watch?v=KglxHuC-ToU';
-
-	const stream = ytdl(yturl, { audioFormat: 'mp3', quality: 'lowest' });
+function downloadStream(url: string, spaceId: string) {
+	// const yturl = 'https://www.youtube.com/watch?v=KglxHuC-ToU';
+	const baseUrl = 'http://localhost:3001/streaming/';
+	const stream = ytdl(url, { audioFormat: 'mp3', quality: 'lowest' });
 
 	var proc = ffmpeg(stream)
 		.outputOptions([
 			'-hls_time 10',
 			'-f hls',
-			`-hls_base_url http://localhost:3001/streaming/`
+			`-hls_base_url ${baseUrl}${spaceId}/`
 		])
-		.output('src/streaming/stream.m3u8')
+		.output(`src/streaming/${spaceId}/stream.m3u8`)
 		.on('start', () => console.log('streaming started'))
 		.on('error', function (err: any) {
 			console.log('an error happened: ' + err.message);
@@ -123,9 +189,7 @@ app.get('/', (req: any, res: any) => {
 		})
 		.on('end', () => console.log('HLS stream ended'))
 		.run();
-
-});
-
+}
 
 const clients = new Set();
 
